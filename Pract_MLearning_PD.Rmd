@@ -1,0 +1,172 @@
+---
+title: "Practical M-Learning Project - Using Random Forests"
+author: "Pierre Dubeau"
+date: "February 26, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Predicting the performance of 'quantified self movement enthousiasts' (aka 'sport geeks') using Random Forests
+
+### Objectives
+
+The goal of this project is to predict the performance scores of a group of 'sport geeks' using a **machine learning** algorithm. The data provided for this exercise were obtained from a monitoring device using an accelerometer chipset and consisted of 38 metrics collected at 4 locations, i.e., belt, forearm, arm, and dumbbell; metrics are derived from movement of the device in a 3-dimensional space. The data were obtained from six participants of mixed ethnic origins, most likely male, and 4 out of 6 individuals have a Spanish-sounding first name. 
+
+Participants performed 'barbell lifts' as per instructed, i.e., correctly and incorrectly, and in 5 different ways.
+
+### Summary of methods
+i. Load libraries;
+1. Read training and testing data from 'csv' formatted files residing on local computer;
+2. Select variables that are relevant to measures of effort;
+3. Create training and test set using caret 'createDataPartition';
+4. Create Random Forest (RF) model using training set;
+5. Check variable importance;
+6. Check highly correlated variables among 'important' variables, if need be;
+7. Use variable subset to build a second RF model and compare out-of-bag error rates between first and second RF model;
+8. Predict 'classe' using Random Forest model and test set;
+9. Calculate overall classification accuracy (and error) using caret confusionMatrix;
+10. Finally, predict classe outcome from 20 cases in testing file using random forest model and submit answers
+
+### Data
+Below are the links to the training and test data, respectively:
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+Data Source: <http://groupware.les.inf.puc-rio.br/har>
+
+1. Libraries required for this exercise included R 'caret' which was used for data manipulations and confusion matrix calculations, and 'randomForests' to train the predictive model. The data were read from the working directory as per setting strings. Note that all cells containing 'missing' information were assigned to 'NAs' using the 'na.strings' string.
+
+```{r preliminaries}
+library(caret)
+library(randomForest)
+setwd("~/_R/r_course")
+training <- read.csv("pml-training.csv", na.strings = c("NA", "#DIV/0!", ""))
+testing <- read.csv("pml-testing.csv", na.strings = c("NA", "#DIV/0!", ""))
+```
+
+Check data dimensions and summarize classe variable:
+```{r quick check}
+dim(training); dim(testing)
+summary(training$classe)
+prop.table(table(training$classe))
+```
+
+### Processing
+Relevant variables were selected, first by removing the first 7 columns which did not contain measures of physical effort, then the 'NAs' were removed by identifying their respective columns. the object 'invar' was created for this purpose, and used to limit the final number of variables to 53 predictors for both the training and testing set. The testing set was set aside to be used for classification accuracy assessment carried out at the final stage.
+
+```{r select relevant variables}
+selection <- c(8:160)
+training <- training[, selection]
+testing <- testing[, selection]
+invar <- apply(!is.na(training), 2, sum) > nrow(training)-1
+training <- training[, invar]
+testing <- testing[, invar]
+```
+
+A seed number was selected to compare results between different model runs if required. Caret function: 'createDataPartition' was used to separate the training set into a 'train' and 'test' set using a 60:40 ratio, respectively.
+
+```{r data partition}
+rseed <- 5431931
+set.seed(rseed)
+inTrain <- createDataPartition(y = training$classe, p = 0.60, list = FALSE)
+train <- training[inTrain,]
+test <- training[-inTrain,]
+
+dim(train); dim(test)
+```
+### Random Forest Model
+
+A prediction model was built using randomForest (RF) algorithm. The number of trees (ntree) was set to 2000 and mtry value set to its default setting; note that importance was set to TRUE. Variable importance is used to evaluate the RF model. Also, RF automatically excludes the response variable i.e., 'classe' from the predictors.   
+
+```{r random forest}
+set.seed(rseed)
+rf_model <- randomForest(classe ~., data = train, 
+                         importance=TRUE, ntree = 2000)
+print(rf_model)
+
+```
+Based on the model output the out-of-bag estimate of error rate was 0.65% or an overall prediction accuracy of 99.35%. This can also be calculated using RF model $err.rate object as shown below. The out-of-bag error rate is estimated from the bootstrap samples set aside for each tree construction. This estimator is considered unbiased but tends to be overly optimistic with respect to the model overall accuracy. For this reason, a test set was set aside to conduct a separate accuracy assessment. However, since random forest already uses bootstrap samples from the 'same' dataset, it is highly likely that both, the accuracy based on OOB error rate would obtain very similar to that based on the 'independent' test. This was confirmed later on in this exercise.
+
+```{r OOB}
+OOB <- rf_model$err.rate[2000,1]
+OOBAcc <- 1-OOB
+print(OOB) 
+print(OOBAcc)
+```
+
+The variable importance measures generated by random forest were assessed using the function 'varImpPlot', which provided a quick look at the top ranking variables based on two measures of importance: 1. mean decrease in accuracy (based on out-of-bag error rates) and 2. mean decrease in GINI index. The former is usually more informative than the latter, yet both methods generated similar ranking results. 
+
+```{r variable importance}
+varImpPlot(rf_model)
+```
+
+Variables with importance values greater than 50 were selected and used as a new variable set to the RF model to test whether predictions could be improved.
+
+```{r select variables}
+imp <- importance(rf_model)[,6]
+imp <- as.data.frame(sort(imp, decreasing=T, index.return=T))
+colnames(imp) <- c("imp", "i")
+
+selcrit <- imp$imp > 50
+imp <- imp[selcrit,]
+
+x <- as.array(imp$i)
+x <- sort(x)
+print(x)
+varsel <- c(1,2,3,5,7,10:16,19,22,26,27,29:31,33,35:46,48,49,51,52,53)
+```
+New predictions were computed with subset of variable set:
+
+```{r New predictions}
+set.seed(5431931)
+rf_model2 <- randomForest(classe ~., data = train[,varsel], importance=TRUE, ntree = 2000)
+OOB2 <- rf_model2$err.rate[2000,1]
+print(OOB2)
+print(OOB)
+```
+Overall accuracy results show no significant changes between the two RF models, so all 52 input variables were retained.
+
+
+### Accuracy Assessment
+Accuracy assessment was conducted in two steps, 1. predict 'classe' outcome from the test set using the RF model, then 2. run confusion matrix calculation comparing predicted values with existing ones. The output from the confusion matrix includes the overall accuracy and associated measures, including 95% Confidence intervals and the Kappa coefficient.
+```{r accuracy}
+predictions <- predict(rf_model, newdata = test)
+cm <- confusionMatrix(predictions, test$classe)
+print(cm)
+
+TestAcc <- cm$overall[1]
+print(TestAcc)
+```
+The overall model accuracy value can also be extracted separately as shown above.
+
+### Predict 'Classe' from testing data
+For the final step, 'classe' outcome for the 20 cases included in the 'testing' file were predicted. The predict function was used as shown earlier and the results passed on to the 'classe' variable (column).
+
+```{r predict}
+predtesting <- predict(rf_model, newdata = testing)
+testing$classe <- predtesting
+```
+
+### Submit Results
+
+Submission of results includes a csv file and the print output shown below:
+```{r submit}
+submit <- data.frame(problem_id <- testing$problem_id, classe = predtesting)
+write.csv(submit, file = "coursera-submission_Pierre_Dubeau.csv", row.names = FALSE)
+
+solutions <- testing$classe
+print(solutions)
+```
+
+The solutions should be as follow, from id 1 to 20:
+[1] B A B A A E D B A A B C B A E E A B B B
+
+And this concludes the practical exercise.
+
+### Conclusion
+Random Forest algorithm was selected to predict physical activity performance scores using data extracted from the 'training.csv' file. Results show that the RF model predicted outcome with greater than 99% prediction accuracy for both assessments, the one based on out-of-bag error rates and the one based on the test data set aside before constructing the model. Random forest model prediction performance did not improved with a reduced set of variables selected among the most important ones. The level of correlation among the variables was not tested since the full set (n=52) was already performing well and for brevity.
